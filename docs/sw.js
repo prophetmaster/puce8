@@ -1,5 +1,5 @@
 // Service worker de Puce8 Studio : fait marcher l'app hors ligne.
-const CACHE = 'puce8-d0b7cda883';
+const CACHE = 'puce8-2317692224';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png',
   './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
