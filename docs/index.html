@@ -136,6 +136,11 @@ h2{font-family:var(--f-display);font-size:16px;letter-spacing:.06em;text-transfo
 .scope canvas{width:100%;height:130px;display:block;border-radius:6px;background:var(--lcd);box-shadow:inset 0 2px 4px rgba(0,0,0,.35)}
 .status{font-family:var(--f-lcd);font-size:20px;line-height:1.1;color:var(--c3);min-height:22px}
 
+/* Import MIDI */
+.midi{margin-bottom:14px;border-color:var(--c2)}
+.midi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 14px}
+.midi-grid .lbl b{color:var(--chc);font-weight:400}
+
 /* Pads */
 .pads-bar{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
 .seg{display:flex;background:var(--chassis);border:1px solid var(--line);border-radius:8px;padding:3px;gap:3px}
@@ -216,19 +221,33 @@ h2{font-family:var(--f-display);font-size:16px;letter-spacing:.06em;text-transfo
       <div class="field tfield"><label class="lbl" for="songSel">Exemples</label>
         <select id="songSel"><option value="">Charger…</option><option value="0">Château de pixels</option><option value="1">Néon 2026</option><option value="2">Page blanche</option></select></div>
       <div class="field tfield narrow"><label class="lbl" for="steps">Longueur</label>
-        <select id="steps"><option value="16">16 pas</option><option value="32">32 pas</option><option value="64">64 pas</option></select></div>
+        <select id="steps"><option value="16">16 pas</option><option value="32">32 pas</option><option value="64">64 pas</option><option value="128">128 pas</option><option value="256">256 pas</option></select></div>
       <div class="field tfield narrow"><label class="lbl" for="grain">Grain</label>
         <select id="grain"><option value="0">Propre</option><option value="8">8 bits</option><option value="6">6 bits</option><option value="4">4 bits</option></select></div>
       <div class="tactions">
         <button class="btn primary" id="exportWav">Exporter WAV</button>
         <button class="btn" id="saveJson">Sauver</button>
         <label class="btn" for="openJson">Ouvrir</label><input type="file" id="openJson" accept=".json,application/json" hidden>
+        <label class="btn" for="midiIn">Importer un MIDI</label><input type="file" id="midiIn" accept=".mid,.midi,audio/midi,audio/x-midi" hidden>
       </div>
       <div class="confirm" id="confirmBar" hidden>
         <span>Remplacer votre morceau actuel par cet exemple ?</span>
         <button class="btn sm primary" id="cfYes">Remplacer</button>
         <button class="btn sm" id="cfNo">Garder mon morceau</button>
       </div>
+    </div>
+
+    <div class="panel midi" id="midiPanel" hidden>
+      <div class="inst-head"><b id="midiTitle">Importer un MIDI</b><span class="muted" id="midiInfo"></span></div>
+      <p class="hint" style="margin:0">Chaque canal de la console ne joue qu'une note à la fois. Choisissez quelle partie du MIDI va sur chaque canal. Pour une partie de piano, la voix haute donne en général la mélodie et la voix basse la basse.</p>
+      <div class="midi-grid" id="midiMap"></div>
+      <div class="midi-grid">
+        <div class="field"><label class="lbl" for="midiStart">À partir de la mesure</label><select id="midiStart"></select></div>
+        <div class="field"><label class="lbl" for="midiPrec">Précision</label>
+          <select id="midiPrec"><option value="16">Double croche (normal)</option><option value="32">Triple croche (morceaux rapides)</option></select></div>
+      </div>
+      <p class="src-info" id="midiSummary"></p>
+      <div class="row"><button class="btn primary" id="midiGo">Importer et remplacer le morceau</button><button class="btn" id="midiCancel">Annuler</button></div>
     </div>
 
     <div class="studio">
@@ -339,6 +358,8 @@ const ARPS = {'':[0], M:[0,4,7], m:[0,3,7], o:[0,12]};
 const ARP_LABEL = {'':'Aucun', M:'Majeur', m:'Mineur', o:'Octave'};
 const DRUM_ROWS = [['c','Crash'],['o','Charley ouv.'],['h','Charley'],['s','Caisse cl.'],['k','Grosse c.']];
 const ROWS_MEL = 25;
+const MAX_STEPS = 256; // 16 mesures en 4/4
+const STEP_CHOICES = [16, 32, 64, 128, 256];
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const COL = {};
 function readColors(){
@@ -544,23 +565,23 @@ function parseLine(str){
 function buildSong(ex){
   const mel = (meta, d) => ({...meta, kind:'mel', base:d.base, inst:{...d.inst}, notes:d.line ? parseLine(d.line) : [], mute:false, solo:false});
   const rows = {};
-  DRUM_ROWS.forEach(([k]) => { const s = ((ex.drums||{})[k]||'').replace(/[|\s]/g,''); rows[k] = Array.from({length:64}, (_,i) => s[i]==='x' ? 1 : 0); });
+  DRUM_ROWS.forEach(([k]) => { const s = ((ex.drums||{})[k]||'').replace(/[|\s]/g,''); rows[k] = Array.from({length:MAX_STEPS}, (_,i) => s[i]==='x' ? 1 : 0); });
   return {name:ex.name, bpm:ex.bpm, steps:ex.steps, bits:0,
     ch:[mel(CH_META[0],ex.p1), mel(CH_META[1],ex.p2), mel(CH_META[2],ex.tri), {...CH_META[3], kind:'drum', kit:ex.kit, vol:.9, rows, mute:false, solo:false}]};
 }
 function normalizeSong(o){
   if (!o || !Array.isArray(o.ch) || o.ch.length !== 4) throw new Error('format');
   const base = buildSong(EX[2]);
-  const s = {name:String(o.name||'Sans titre').slice(0,40), bpm:clamp(+o.bpm||120,40,260), steps:[16,32,64].includes(+o.steps)?+o.steps:32, bits:[0,4,6,8].includes(+o.bits)?+o.bits:0, ch:base.ch};
+  const s = {name:String(o.name||'Sans titre').slice(0,40), bpm:clamp(+o.bpm||120,40,320), steps:STEP_CHOICES.includes(+o.steps)?+o.steps:32, bits:[0,4,6,8].includes(+o.bits)?+o.bits:0, ch:base.ch};
   for (let i=0;i<3;i++){
     const src = o.ch[i]||{}, ch = s.ch[i];
     ch.base = clamp(+src.base||ch.base, 24, 84); Object.keys(ch.inst).forEach(k => { if (src.inst && src.inst[k] !== undefined) ch.inst[k] = k==='wave' ? (WAVES[src.inst.wave]?src.inst.wave:ch.inst.wave) : +src.inst[k]; });
-    ch.notes = (src.notes||[]).filter(n => n && Number.isFinite(+n.s) && Number.isFinite(+n.n)).map(n => ({s:clamp(+n.s|0,0,63), n:clamp(+n.n|0,12,120), len:clamp(+n.len|0||1,1,64), arp:ARPS[n.arp]?n.arp:''}));
+    ch.notes = (src.notes||[]).filter(n => n && Number.isFinite(+n.s) && Number.isFinite(+n.n)).map(n => ({s:clamp(+n.s|0,0,MAX_STEPS-1), n:clamp(+n.n|0,12,120), len:clamp(+n.len|0||1,1,MAX_STEPS), arp:ARPS[n.arp]?n.arp:''}));
     ch.mute = !!src.mute; ch.solo = !!src.solo;
   }
   const d = o.ch[3]||{}, dc = s.ch[3];
   dc.kit = d.kit === 'modern' ? 'modern' : 'nes'; dc.vol = clamp(+d.vol||.9, 0, 1); dc.mute = !!d.mute; dc.solo = !!d.solo;
-  DRUM_ROWS.forEach(([k]) => { const r = d.rows && d.rows[k]; if (Array.isArray(r)) dc.rows[k] = Array.from({length:64}, (_,i) => r[i] ? 1 : 0); });
+  DRUM_ROWS.forEach(([k]) => { const r = d.rows && d.rows[k]; if (Array.isArray(r)) dc.rows[k] = Array.from({length:MAX_STEPS}, (_,i) => r[i] ? 1 : 0); });
   return s;
 }
 
@@ -805,7 +826,7 @@ roll.addEventListener('pointercancel', endDrag);
 
 /* Transport events */
 $('#play').addEventListener('click', () => playing ? stop() : play());
-const setBpm = v => { song.bpm = clamp(v, 40, 260); $('#bpm').textContent = song.bpm; changed(false); };
+const setBpm = v => { song.bpm = clamp(v, 40, 320); $('#bpm').textContent = song.bpm; changed(false); };
 $('#bpmDown').addEventListener('click', e => setBpm(song.bpm - (e.shiftKey ? 10 : 2)));
 $('#bpmUp').addEventListener('click', e => setBpm(song.bpm + (e.shiftKey ? 10 : 2)));
 $('#title').addEventListener('input', e => { song.name = e.target.value; changed(false); });
@@ -838,6 +859,163 @@ $('#openJson').addEventListener('change', async e => {
     changed(false); dirty = false; syncTransport(); renderChannels(); renderInst(); drawAll(); toast(song.name + ' ouvert'); }
   catch(err){ toast("Ce fichier n'est pas un morceau Puce8"); }
 });
+/* ---------- Import MIDI ---------- */
+function parseMidi(buf){
+  const d = new DataView(buf); let p = 0;
+  const u8 = () => d.getUint8(p++), u16 = () => { const v = d.getUint16(p); p += 2; return v; }, u32 = () => { const v = d.getUint32(p); p += 4; return v; };
+  const str = n => { let s = ''; for (let i=0;i<n;i++) s += String.fromCharCode(d.getUint8(p+i)); p += n; return s; };
+  const vlq = () => { let v = 0, b; do { b = u8(); v = (v << 7) | (b & 127); } while (b & 128); return v; };
+  if (str(4) !== 'MThd') throw new Error('not_midi');
+  const hl = u32(); u16(); const ntr = u16(), div = u16(); p += hl - 6;
+  if (div & 0x8000) throw new Error('smpte');
+  const notes = [], names = {}, tempos = [], sigs = [];
+  for (let t=0; t<ntr && p+8 <= d.byteLength; t++){
+    const id = str(4), len = u32(), end = Math.min(p+len, d.byteLength);
+    if (id !== 'MTrk'){ p = end; continue; }
+    let tick = 0, run = 0; const open = {};
+    while (p < end){
+      tick += vlq();
+      let st = d.getUint8(p);
+      if (st & 0x80){ p++; if (st < 0xF0) run = st; } else st = run; // statut courant
+      if (st === 0xFF){
+        const type = u8(), l = vlq();
+        if (type === 0x51 && l === 3) tempos.push({tick, us:(d.getUint8(p)<<16)|(d.getUint8(p+1)<<8)|d.getUint8(p+2)});
+        else if (type === 0x58 && l >= 2) sigs.push({tick, num:d.getUint8(p), den:1 << d.getUint8(p+1)});
+        else if (type === 0x03 && !names[t]){ let s = ''; for (let i=0;i<l;i++) s += String.fromCharCode(d.getUint8(p+i)); names[t] = s.trim(); }
+        p += l; if (type === 0x2F) p = end; continue;
+      }
+      if (st === 0xF0 || st === 0xF7){ p += vlq(); continue; }
+      const kind = st & 0xF0, ch = st & 15;
+      if (kind === 0x80 || kind === 0x90){
+        const n = u8(), v = u8(), key = ch*128 + n;
+        if (kind === 0x90 && v > 0) (open[key] = open[key] || []).push(tick);
+        else { const t0 = open[key] && open[key].shift(); if (t0 !== undefined) notes.push({t:t0, e:tick, n, ch, tr:t}); }
+      } else if (kind === 0xC0 || kind === 0xD0) p += 1;
+      else p += 2;
+    }
+    for (const key in open) for (const t0 of open[key]) notes.push({t:t0, e:tick, n:key%128, ch:Math.floor(key/128), tr:t});
+    p = end;
+  }
+  tempos.sort((a,b) => a.tick-b.tick); sigs.sort((a,b) => a.tick-b.tick);
+  return {div, notes, names, us:tempos.length ? tempos[0].us : 500000, sig:sigs.length ? sigs[0] : {num:4, den:4}};
+}
+// Batterie General MIDI vers les 5 lignes du canal bruit
+const GM_DRUMS = {35:'k',36:'k',41:'k',43:'k',45:'k', 37:'s',38:'s',39:'s',40:'s',47:'s',48:'s',50:'s', 42:'h',44:'h',51:'h',53:'h',59:'h', 46:'o', 49:'c',52:'c',55:'c',57:'c'};
+const VOICES = {top:'voix haute', mid:'voix du milieu', bottom:'voix basse'};
+let midi = null;
+function midiParts(m){
+  const map = new Map();
+  for (const nt of m.notes){ const k = nt.tr*16 + nt.ch; if (!map.has(k)) map.set(k, {tr:nt.tr, ch:nt.ch, drum:nt.ch === 9, notes:[]}); map.get(k).notes.push(nt); }
+  const parts = [...map.values()].sort((a,b) => a.tr-b.tr || a.ch-b.ch);
+  const multi = tr => parts.filter(x => x.tr === tr).length > 1;
+  parts.forEach(pt => {
+    pt.avg = pt.notes.reduce((a,n) => a+n.n, 0) / pt.notes.length;
+    pt.name = pt.drum ? 'Batterie' : (m.names[pt.tr] || 'Piste ' + (pt.tr+1)) + (multi(pt.tr) ? ' · canal ' + (pt.ch+1) : '');
+  });
+  return parts;
+}
+function midiGeom(){
+  const prec = +$('#midiPrec').value, q = midi.div / (prec/4);
+  const spb = Math.max(1, Math.round(midi.sig.num * 16 / midi.sig.den)) * (prec/16);
+  const total = Math.ceil(Math.max(...midi.notes.map(n => n.e)) / q);
+  return {prec, q, spb, total, bars:Math.max(1, Math.ceil(total/spb))};
+}
+function openMidiPanel(m, fname){
+  const parts = midiParts(m);
+  if (!parts.length) throw new Error('empty');
+  midi = {...m, parts, fname};
+  const mel = parts.map((pt, i) => ({pt, i})).filter(x => !x.pt.drum).sort((a,b) => b.pt.notes.length - a.pt.notes.length).slice(0, 3);
+  const drumIdx = parts.findIndex(pt => pt.drum);
+  let def = ['', '', '', drumIdx >= 0 ? String(drumIdx) : ''];
+  if (mel.length === 1) def = [`${mel[0].i}:top`, `${mel[0].i}:mid`, `${mel[0].i}:bottom`, def[3]];
+  else if (mel.length > 1){
+    const byPitch = mel.slice().sort((a,b) => b.pt.avg - a.pt.avg);
+    def[0] = `${byPitch[0].i}:top`; def[2] = `${byPitch[byPitch.length-1].i}:bottom`;
+    def[1] = byPitch.length >= 3 ? `${byPitch[1].i}:top` : `${byPitch[0].i}:mid`;
+  }
+  $('#midiMap').innerHTML = song.ch.map((ch, k) => `<div class="field" style="--chc:var(--${ch.color})"><label class="lbl" for="midiCh${k}"><b>${ch.name}</b></label>
+    <select id="midiCh${k}"><option value="">Rien</option></select></div>`).join('');
+  // les noms de pistes viennent du fichier : toujours insérés comme texte
+  const opt = (s, value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; s.appendChild(o); };
+  song.ch.forEach((ch, k) => {
+    const s = $('#midiCh'+k);
+    parts.forEach((pt, i) => {
+      if (k < 3){ if (!pt.drum) Object.entries(VOICES).forEach(([v, l]) => opt(s, `${i}:${v}`, `${pt.name} (${l})`)); }
+      else opt(s, String(i), pt.name + (pt.drum ? '' : ' (comme batterie)'));
+    });
+    s.value = def[k]; s.addEventListener('change', midiSummary);
+  });
+  $('#midiTitle').textContent = 'Importer « ' + fname + ' »';
+  $('#midiPrec').value = '16';
+  fillMidiStart(); midiSummary();
+  $('#midiPanel').hidden = false; $('#midiPanel').scrollIntoView({block:'nearest'});
+}
+function fillMidiStart(){
+  const g = midiGeom(), sel = $('#midiStart'), cur = +sel.value || 1;
+  sel.innerHTML = Array.from({length:g.bars}, (_, b) => `<option value="${b+1}">${b+1}</option>`).join('');
+  sel.value = Math.min(cur, g.bars);
+}
+function midiWindow(){
+  const g = midiGeom(), s0 = (+$('#midiStart').value - 1) * g.spb, need = Math.max(1, Math.min(MAX_STEPS, g.total - s0));
+  return {...g, s0, steps:STEP_CHOICES.find(s => s >= need) || MAX_STEPS};
+}
+function midiSummary(){
+  const w = midiWindow(), bpm = clamp(Math.round(60e6/midi.us) * (w.prec/16), 40, 320);
+  $('#midiInfo').textContent = `${midi.parts.length} partie${midi.parts.length > 1 ? 's' : ''} · ${w.bars} mesures · ${Math.round(60e6/midi.us)} BPM`;
+  const barsIn = Math.ceil(w.steps / w.spb);
+  $('#midiSummary').textContent = `Import de ${barsIn} mesure${barsIn > 1 ? 's' : ''} (${w.steps} pas) à ${bpm} BPM.` + (w.total - w.s0 > MAX_STEPS ? ` Le morceau est plus long : importez la suite en choisissant une mesure de départ plus loin.` : '');
+}
+function voiceNotes(pt, voice, w){
+  const by = new Map();
+  for (const nt of pt.notes){
+    const s = Math.round(nt.t / w.q) - w.s0; if (s < 0 || s >= w.steps) continue;
+    if (!by.has(s)) by.set(s, []);
+    by.get(s).push({n:nt.n, len:Math.max(1, Math.round((nt.e-nt.t) / w.q))});
+  }
+  const out = [];
+  [...by.keys()].sort((a,b) => a-b).forEach(s => {
+    const arr = by.get(s).sort((a,b) => a.n-b.n);
+    const pick = voice === 'top' ? arr[arr.length-1] : voice === 'bottom' ? arr[0] : arr.length >= 2 ? arr[arr.length-2] : null;
+    if (pick) out.push({s, n:clamp(pick.n, 12, 120), len:pick.len, arp:''});
+  });
+  out.forEach((nt, i) => { const nx = out[i+1]; if (nx) nt.len = Math.min(nt.len, nx.s - nt.s); nt.len = Math.max(1, Math.min(nt.len, w.steps - nt.s)); });
+  return out;
+}
+function importMidi(){
+  const w = midiWindow(), s = buildSong(EX[2]);
+  s.name = midi.fname.replace(/\.(mid|midi)$/i, '').slice(0, 40); s.steps = w.steps;
+  s.bpm = clamp(Math.round(60e6/midi.us) * (w.prec/16), 40, 320);
+  let count = 0;
+  for (let k=0;k<3;k++){
+    const v = $('#midiCh'+k).value, ch = s.ch[k]; if (!v) continue;
+    const [pi, voice] = v.split(':'); ch.notes = voiceNotes(midi.parts[+pi], voice, w); count += ch.notes.length;
+    if (ch.notes.length){ const ps = ch.notes.map(n => n.n).sort((a,b) => a-b), med = ps[Math.floor(ps.length/2)]; ch.base = clamp(12*Math.floor((med-6)/12), 24, 84); }
+  }
+  const dv = $('#midiCh3').value;
+  if (dv){
+    const pt = midi.parts[+dv], rows = s.ch[3].rows;
+    for (const nt of pt.notes){
+      const st = Math.round(nt.t / w.q) - w.s0; if (st < 0 || st >= w.steps) continue;
+      const k = pt.drum ? GM_DRUMS[nt.n] : (nt.n < 48 ? 'k' : nt.n < 60 ? 's' : 'h');
+      if (k && !rows[k][st]){ rows[k][st] = 1; count++; }
+    }
+  }
+  if (playing) stop();
+  song = s; sel = 0; if (chain) chain.sh.curve = crushCurve(song.bits);
+  changed(false); syncTransport(); renderChannels(); renderInst(); drawAll();
+  $('#midiPanel').hidden = true;
+  toast(`« ${song.name} » importé : ${count} notes`);
+}
+$('#midiIn').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try { openMidiPanel(parseMidi(await f.arrayBuffer()), f.name); }
+  catch(err){ toast(err.message === 'smpte' ? 'Ce MIDI utilise un format de temps non pris en charge' : "Ce fichier n'est pas un MIDI lisible"); }
+});
+$('#midiStart').addEventListener('change', midiSummary);
+$('#midiPrec').addEventListener('change', () => { fillMidiStart(); midiSummary(); });
+$('#midiGo').addEventListener('click', importMidi);
+$('#midiCancel').addEventListener('click', () => { $('#midiPanel').hidden = true; midi = null; });
+
 document.addEventListener('keydown', e => {
   if (e.code !== 'Space' || (e.target.closest && e.target.closest('input,select,textarea,button,label'))) return;
   if ($('#view-studio').hidden) return;
